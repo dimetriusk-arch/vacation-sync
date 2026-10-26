@@ -1,0 +1,14 @@
+{
+  "name": "Отпуска и каникулы — VacSync",
+  "short_name": "VacSync",
+  "description": "Синхронизация дат отпусков и каникул через Google Drive, экспорт в Google Calendar, подсветка пересечений.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2f6fed",
+  "lang": "ru",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
