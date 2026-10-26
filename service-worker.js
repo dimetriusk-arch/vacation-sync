@@ -1,4 +1,4 @@
-const CACHE = 'vacsync-v1';
+const CACHE = 'vacsync-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   './js/store.js',
   './js/overlaps.js',
   './js/ics.js',
+  './js/holidays.js',
   './js/google.js',
   './js/sync.js',
   './js/ui.js',

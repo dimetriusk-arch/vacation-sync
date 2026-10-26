@@ -5,4 +5,8 @@ export const GOOGLE_CONFIG = {
   clientId: 'ВСТАВЬТЕ_СЮДА_CLIENT_ID.apps.googleusercontent.com',
   apiKey: 'ВСТАВЬТЕ_СЮДА_API_KEY',
   appId: 'ВСТАВЬТЕ_СЮДА_PROJECT_NUMBER',
+  // Пока проект в Google Cloud не прошёл верификацию, войти могут только
+  // "Test users", добавленные вручную в OAuth consent screen. На этот адрес
+  // приходят запросы на доступ из кнопки «Запросить доступ» в приложении.
+  adminEmail: 'dimetriusk@gmail.com',
 };

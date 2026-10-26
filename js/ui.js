@@ -1,6 +1,7 @@
 import { store, uid, PALETTE } from './store.js';
 import { overlappingPersonIds, dailyAwayMap } from './overlaps.js';
 import { buildICS, downloadICS } from './ics.js';
+import { holidayName, isEstimatedHoliday } from './holidays.js';
 import * as drive from './google.js';
 import * as sync from './sync.js';
 
@@ -13,6 +14,7 @@ let root = null;
 let activeTab = 'periods';
 const today = new Date();
 let cursor = { y: today.getFullYear(), m: today.getMonth() };
+let timelineMode = 'month'; // 'month' | 'year'
 let detailPeriodId = null;
 let exportIncluded = null;
 
@@ -92,7 +94,8 @@ function render() {
             : signedIn
             ? `<span class="pill pill-ok">В сети: ${esc(store.myPerson().email || store.myPerson().name)}</span>
                <button class="btn btn-ghost" data-action="sign-out">Выйти</button>`
-            : `<button class="btn btn-primary" data-action="sign-in">Войти через Google</button>`
+            : `<button class="btn btn-primary" data-action="sign-in">Войти через Google</button>
+               <button class="btn btn-ghost" data-action="request-access">Нет доступа? Запросить</button>`
         }
       </div>
     </header>
@@ -188,6 +191,41 @@ function renderPeriodCard(p, allPeriods) {
 
 // ---------- Таймлайн ----------
 function renderTimelineTab() {
+  return `
+    <div class="toolbar">
+      <div class="seg">
+        <button class="seg-btn ${timelineMode === 'month' ? 'seg-active' : ''}" data-action="timeline-mode" data-mode="month">Месяц</button>
+        <button class="seg-btn ${timelineMode === 'year' ? 'seg-active' : ''}" data-action="timeline-mode" data-mode="year">Год целиком</button>
+      </div>
+      <button class="btn btn-ghost" data-action="prev-period">←</button>
+      <strong>${timelineMode === 'month' ? MONTHS_RU[cursor.m] + ' ' + cursor.y : cursor.y + ' год'}</strong>
+      <button class="btn btn-ghost" data-action="next-period">→</button>
+    </div>
+    ${renderLegend()}
+    ${timelineMode === 'month' ? renderMonthTimeline() : renderYearTimeline()}
+  `;
+}
+
+function renderLegend() {
+  return `
+    <div class="legend">
+      <span class="legend-item"><span class="legend-swatch legend-weekend"></span>выходной</span>
+      <span class="legend-item"><span class="legend-swatch legend-holiday"></span>праздник РФ</span>
+      <span class="legend-item"><span class="legend-swatch legend-holiday-estimated"></span>праздник РФ (предположительно, перенос ещё не утверждён)</span>
+      <span class="legend-item"><span class="legend-swatch legend-heat"></span>чем темнее — тем больше людей в отъезде</span>
+    </div>
+  `;
+}
+
+function dayCellClasses(iso, weekend) {
+  const cls = ['day-cell'];
+  if (weekend) cls.push('weekend');
+  const hname = holidayName(iso);
+  if (hname) cls.push(isEstimatedHoliday(iso) ? 'holiday-estimated' : 'holiday');
+  return { cls: cls.join(' '), hname };
+}
+
+function renderMonthTimeline() {
   const memberIds = currentMemberIds();
   const periods = currentPeriods();
   const daysInMonth = new Date(cursor.y, cursor.m + 1, 0).getDate();
@@ -198,9 +236,11 @@ function renderTimelineTab() {
 
   const dayHeaders = Array.from({ length: daysInMonth }, (_, i) => {
     const d = i + 1;
+    const iso = isoOf(cursor.y, cursor.m, d);
     const wd = new Date(cursor.y, cursor.m, d).getDay();
     const weekend = wd === 0 || wd === 6;
-    return `<div class="day-cell ${weekend ? 'weekend' : ''}">${d}</div>`;
+    const { cls, hname } = dayCellClasses(iso, weekend);
+    return `<div class="${cls}" ${hname ? `title="${esc(hname)}"` : ''}>${d}</div>`;
   }).join('');
 
   const heatCells = Array.from({ length: daysInMonth }, (_, i) => {
@@ -235,11 +275,6 @@ function renderTimelineTab() {
   const detail = detailPeriodId ? renderDetailPanel(detailPeriodId, periods) : '';
 
   return `
-    <div class="toolbar">
-      <button class="btn btn-ghost" data-action="prev-month">←</button>
-      <strong>${MONTHS_RU[cursor.m]} ${cursor.y}</strong>
-      <button class="btn btn-ghost" data-action="next-month">→</button>
-    </div>
     <div class="timeline" style="--cols:${daysInMonth}">
       <div class="timeline-row timeline-head">
         <div class="row-label">Пересечения</div>
@@ -248,6 +283,94 @@ function renderTimelineTab() {
       <div class="timeline-row timeline-head">
         <div class="row-label"></div>
         <div class="row-grid" style="grid-template-columns:${gridCols}">${dayHeaders}</div>
+      </div>
+      ${rows || '<p class="empty">В этой группе пока нет участников с периодами.</p>'}
+    </div>
+    ${detail}
+  `;
+}
+
+function dayIndexInYear(iso, year) {
+  const [, m, d] = iso.split('-').map(Number);
+  let idx = 0;
+  for (let mm = 1; mm < m; mm++) idx += new Date(year, mm, 0).getDate();
+  return idx + d - 1;
+}
+
+function renderYearTimeline() {
+  const memberIds = currentMemberIds();
+  const periods = currentPeriods();
+  const year = cursor.y;
+  const daysInYear = new Date(year, 1, 29).getMonth() === 1 ? 366 : 365;
+  const startISO = `${year}-01-01`;
+  const endISO = `${year}-12-31`;
+  const away = dailyAwayMap(periods, startISO, endISO);
+  const gridCols = `repeat(${daysInYear}, minmax(3px, 1fr))`;
+
+  const dayIso = (idx) => {
+    const d = new Date(year, 0, 1);
+    d.setDate(d.getDate() + idx);
+    return isoOf(d.getFullYear(), d.getMonth(), d.getDate());
+  };
+
+  const monthHeader = Array.from({ length: 12 }, (_, m) => {
+    const n = new Date(year, m + 1, 0).getDate();
+    return `<div class="month-cell" style="grid-column:span ${n}">${MONTHS_RU[m].slice(0, 3)}</div>`;
+  }).join('');
+
+  const heatCells = Array.from({ length: daysInYear }, (_, i) => {
+    const iso = dayIso(i);
+    const n = away.get(iso)?.size || 0;
+    const lvl = n === 0 ? '' : n === 1 ? 'lvl1' : n === 2 ? 'lvl2' : 'lvl3';
+    return `<div class="heat-cell heat-cell-thin ${lvl}" title="${fmtRu(iso)}: ${n} чел. в отъезде"></div>`;
+  }).join('');
+
+  const dayStrip = Array.from({ length: daysInYear }, (_, i) => {
+    const iso = dayIso(i);
+    const [yy, mm, dd] = iso.split('-').map(Number);
+    const wd = new Date(yy, mm - 1, dd).getDay();
+    const weekend = wd === 0 || wd === 6;
+    const { cls, hname } = dayCellClasses(iso, weekend);
+    return `<div class="${cls} day-cell-thin" ${hname ? `title="${esc(hname)}"` : ''}></div>`;
+  }).join('');
+
+  const rows = memberIds
+    .map((pid) => {
+      const person = store.state.people[pid];
+      if (!person) return '';
+      const bars = periods
+        .filter((p) => p.personId === pid && p.start <= endISO && p.end >= startISO)
+        .map((p) => {
+          const s = p.start < startISO ? 1 : dayIndexInYear(p.start, year) + 1;
+          const e = p.end > endISO ? daysInYear : dayIndexInYear(p.end, year) + 1;
+          const overlap = overlappingPersonIds(p, periods).size > 0;
+          return `<div class="timeline-bar year-bar ${overlap ? 'overlap' : ''}" style="grid-column:${s} / ${e + 1};background:${p.color || person.color}" title="${esc(p.title)} (${fmtRu(p.start)} — ${fmtRu(p.end)})" data-action="show-period" data-id="${p.id}"></div>`;
+        })
+        .join('');
+      return `
+        <div class="timeline-row">
+          <div class="row-label"><span class="dot" style="background:${person.color}"></span>${esc(person.name)}</div>
+          <div class="row-grid" style="grid-template-columns:${gridCols}">${bars}</div>
+        </div>
+      `;
+    })
+    .join('');
+
+  const detail = detailPeriodId ? renderDetailPanel(detailPeriodId, periods) : '';
+
+  return `
+    <div class="timeline timeline-year">
+      <div class="timeline-row timeline-head">
+        <div class="row-label">Месяцы</div>
+        <div class="row-grid month-row" style="grid-template-columns:${gridCols}">${monthHeader}</div>
+      </div>
+      <div class="timeline-row timeline-head">
+        <div class="row-label">Пересечения</div>
+        <div class="row-grid heat-row" style="grid-template-columns:${gridCols}">${heatCells}</div>
+      </div>
+      <div class="timeline-row timeline-head">
+        <div class="row-label"></div>
+        <div class="row-grid" style="grid-template-columns:${gridCols}">${dayStrip}</div>
       </div>
       ${rows || '<p class="empty">В этой группе пока нет участников с периодами.</p>'}
     </div>
@@ -435,6 +558,65 @@ function openPeriodEditor(periodId) {
   });
 }
 
+// ---------- Запрос тестового доступа ----------
+function openRequestAccessModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <form class="modal" id="request-access-form">
+      <h3>Запросить доступ к синхронизации</h3>
+      <p class="hint">Приложение пока в тестовом режиме у Google: войти может только тот, кого администратор добавил в список тестировщиков. Заполните форму — администратор добавит ваш email вручную.</p>
+      <label>Ваше имя<input name="name" placeholder="Как вас зовут"></label>
+      <label>Email, которым будете входить через Google<input name="email" type="email" required placeholder="you@gmail.com"></label>
+      <label>Комментарий (необязательно)<textarea name="message" rows="2" placeholder="Например: хочу синхронизировать отпуска с семьёй"></textarea></label>
+      <div class="row modal-actions">
+        <button type="button" class="btn btn-ghost" id="cancel-request">Отмена</button>
+        <button type="button" class="btn btn-ghost" id="copy-request">Скопировать текст</button>
+        <button type="submit" class="btn btn-primary">Открыть почту</button>
+      </div>
+    </form>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#cancel-request').addEventListener('click', () => overlay.remove());
+
+  const buildMessage = () => {
+    const fd = new FormData(overlay.querySelector('#request-access-form'));
+    const email = fd.get('email').trim();
+    if (!email) return null;
+    const name = fd.get('name').trim();
+    const message = fd.get('message').trim();
+    const lines = [
+      `Прошу добавить меня в тестировщики VacSync (${location.origin}${location.pathname}).`,
+      `Имя: ${name || '—'}`,
+      `Email для входа через Google: ${email}`,
+    ];
+    if (message) lines.push(`Комментарий: ${message}`);
+    return { text: lines.join('\n') };
+  };
+
+  overlay.querySelector('#copy-request').addEventListener('click', async () => {
+    const built = buildMessage();
+    if (!built) return toast('Укажите email', true);
+    try {
+      await navigator.clipboard.writeText(built.text);
+      toast('Текст скопирован — отправьте его администратору любым способом');
+    } catch {
+      toast('Не удалось скопировать — выделите текст вручную');
+    }
+  });
+
+  overlay.querySelector('#request-access-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const built = buildMessage();
+    if (!built) return toast('Укажите email', true);
+    if (!cfg?.adminEmail) return toast('Email администратора не настроен в config.js', true);
+    const subject = encodeURIComponent('VacSync — запрос тестового доступа');
+    const body = encodeURIComponent(built.text);
+    window.location.href = `mailto:${cfg.adminEmail}?subject=${subject}&body=${body}`;
+    overlay.remove();
+  });
+}
+
 function planRow(pl) {
   return `
     <div class="plan-row" data-plan-id="${pl.id || ''}">
@@ -485,19 +667,27 @@ async function onClick(e) {
   } else if (action === 'close-detail') {
     detailPeriodId = null;
     render();
-  } else if (action === 'prev-month') {
-    cursor.m--; if (cursor.m < 0) { cursor.m = 11; cursor.y--; }
+  } else if (action === 'timeline-mode') {
+    timelineMode = btn.dataset.mode;
+    detailPeriodId = null;
     render();
-  } else if (action === 'next-month') {
-    cursor.m++; if (cursor.m > 11) { cursor.m = 0; cursor.y++; }
+  } else if (action === 'prev-period') {
+    if (timelineMode === 'month') { cursor.m--; if (cursor.m < 0) { cursor.m = 11; cursor.y--; } }
+    else cursor.y--;
     render();
+  } else if (action === 'next-period') {
+    if (timelineMode === 'month') { cursor.m++; if (cursor.m > 11) { cursor.m = 0; cursor.y++; } }
+    else cursor.y++;
+    render();
+  } else if (action === 'request-access') {
+    openRequestAccessModal();
   } else if (action === 'sign-in') {
     try {
       await drive.signIn(cfg);
       toast('Вход выполнен');
       render();
     } catch (err) {
-      toast('Не удалось войти: ' + err.message, true);
+      toast('Не удалось войти: ' + err.message + '. Если доступ закрыт — нажмите «Нет доступа? Запросить».', true);
     }
   } else if (action === 'sign-out') {
     drive.signOut();
